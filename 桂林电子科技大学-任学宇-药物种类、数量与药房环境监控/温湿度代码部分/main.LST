@@ -1,0 +1,550 @@
+C51 COMPILER V9.00   MAIN                                                                  07/04/2023 16:40:37 PAGE 1   
+
+
+C51 COMPILER V9.00, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN main.OBJ
+COMPILER INVOKED BY: E:\keil\C51\BIN\C51.EXE main.c BROWSE DEBUG OBJECTEXTEND
+
+line level    source
+
+   1          #include "reg52.H"
+   2          #include "stdio.h"
+   3          #include "intrins.h"
+   4          #include <math.h>
+   5          
+   6          #define uchar unsigned char
+   7          #define uint unsigned int
+   8          
+   9          #define DB P0//液晶并行数据接口
+  10          sbit  RS = P2^0;//液晶指令数据信号
+  11          sbit  RW = P2^1;//液晶读写信号
+  12          sbit  E  = P2^2;//液晶使能信号
+  13          
+  14          uchar bdata datbyte;
+  15          sbit datbyte0=datbyte^0;
+  16          sbit datbyte7=datbyte^7;
+  17          
+  18          unsigned char  key_value;//获取到按键的值
+  19          
+  20          sbit  Data=P1^1;       //温湿度IO
+  21          signed char  humi_value;//湿度
+  22          signed char  temp_value;//温度
+  23          
+  24          unsigned char now_window;//当前显示窗口
+  25          unsigned char curr_menu;
+  26          #define  normal_mode  0x10//显示模式
+  27          #define  set_mode  0x20//设置模式
+  28          
+  29          signed char AlarmTL=10;                    // 温度下限报警值
+  30          signed char AlarmTH=37;                 // 温度上限报警值
+  31          signed char AlarmHL=40;               // 湿度下限报警值
+  32          signed char AlarmHH=88;                 // 湿度上限报警值
+  33          
+  34          unsigned char i;
+  35          unsigned char cnt_100ms,cnt_500ms =0;
+  36          unsigned char time_100ms_flag;
+  37          unsigned char open_del;//开锁成功延时计数
+  38          unsigned char open_flag;//锁状态标志
+  39          sbit beep = P1^0;
+  40          
+  41          sbit LedTL_P   = P1^3;                  // 温度过低报警指示灯
+  42          sbit LedTH_P   = P1^4;                  // 温度过高报警指示灯
+  43          sbit LedHL_P   = P1^5;                  // 湿度过低报警指示灯
+  44          sbit LedHH_P   = P1^6;                  // 湿度过高报警指示灯
+  45          
+  46          /* 延时函数，延时1ms与1us*/
+  47          void delay_ms(unsigned int cnt)   
+  48          {
+  49   1              unsigned int x;
+  50   1              for( ; cnt>0; cnt--)
+  51   1              {
+  52   2                      for(x=110; x>0; x--);//软件延时为1MS
+  53   2              }
+  54   1      }
+  55          #if 0
+C51 COMPILER V9.00   MAIN                                                                  07/04/2023 16:40:37 PAGE 2   
+
+              void delay_us(unsigned int cnt)   
+              {
+                      while(cnt--);
+              }
+              #endif
+  61          /*定时器初始化*/
+  62          void time_init(void)
+  63          {
+  64   1                TMOD |= 0x01;//time0 工作方式为1
+  65   1                TH0 = 0xf8;//装载初值
+  66   1                TL0 = 0x2f;//装载初值，为2ms
+  67   1            TR0 = 1;//开启定时器
+  68   1                ET0 = 1;//打开中断
+  69   1                EA=1;
+  70   1      }
+  71          /*按键扫描*/
+  72          void key_scan(void)
+  73          {
+  74   1              static unsigned char key_in_flag = 0;//按键按下标志
+  75   1              unsigned char key_l;//存储扫描到行列值。
+  76   1              key_value = 20;//按键值清除
+  77   1              if((P3 & 0x0f) != 0x0f)//按键按下
+  78   1              {
+  79   2                      delay_ms(1);//按键消抖动
+  80   2                      if(((P3 & 0x0f) != 0x0f) && (key_in_flag == 1))
+  81   2                      {
+  82   3                              key_in_flag = 0;//松手检测防止一直触发
+  83   3                              P3 = 0x0f;
+  84   3                  //delay_ms(1);//按键消抖动
+  85   3                              key_l = P3;//扫描得到按键值
+  86   3                              switch(key_l)
+  87   3                              {
+  88   4                                      //获取按键值
+  89   4                                      case 0x0e:
+  90   4                                      {
+  91   5                                              key_value = 1;
+  92   5                                      }
+  93   4                                      break;
+  94   4                                      case 0x0d:
+  95   4                                      {
+  96   5                                              key_value = 2;
+  97   5                                      }
+  98   4                                      break;
+  99   4                                      case 0x0b:
+ 100   4                                      {
+ 101   5                                              key_value = 3;
+ 102   5                                      }
+ 103   4                                      break;
+ 104   4                              }
+ 105   3                      }
+ 106   2              }
+ 107   1              else
+ 108   1              {
+ 109   2                      key_in_flag = 1;//(按键松开标志)
+ 110   2              }
+ 111   1      
+ 112   1      }
+ 113          
+ 114          /*向LCD写入一个字节的命令*/
+ 115          void lcd_wri_com(unsigned char com)       //写入命令
+ 116          {
+ 117   1              E = 0;   //使能清零
+C51 COMPILER V9.00   MAIN                                                                  07/04/2023 16:40:37 PAGE 3   
+
+ 118   1              RS = 0;  //选择写入命令
+ 119   1              RW = 0;  //选择写入
+ 120   1      
+ 121   1              DB = com;
+ 122   1              delay_ms(1);
+ 123   1      
+ 124   1              E = 1;   //写入时序
+ 125   1              delay_ms(5);
+ 126   1              E = 0;
+ 127   1      }
+ 128          
+ 129          /*向LCD写入一个字节的数据*/
+ 130          void lcd_wri_data(unsigned char dat)//写入数据
+ 131          {
+ 132   1              E = 0;    //使能清零
+ 133   1              RS = 1;   //选择写入数据
+ 134   1              RW = 0;   //选择写入
+ 135   1              DB = dat;
+ 136   1              delay_ms(1);
+ 137   1              E = 1;    //写入时序
+ 138   1              delay_ms(5);
+ 139   1              E = 0;
+ 140   1      }
+ 141          /*刷新屏幕显示*/
+ 142          void wri_string(unsigned char y,unsigned char x,unsigned char *p)
+ 143          {
+ 144   1              if(y==1)//如果选择第一行
+ 145   1                      lcd_wri_com(0x80+x);//选中地址
+ 146   1              else
+ 147   1                      lcd_wri_com(0xc0+x);//选中地址
+ 148   1                      while(*p)
+ 149   1                      {
+ 150   2                              lcd_wri_data(*p);//写入数据
+ 151   2                              p++;
+ 152   2                      }
+ 153   1      }
+ 154          /*lcd写入字符*/
+ 155          void lcd_write_char(unsigned char y, unsigned char x, unsigned char dat) //列x=0~15,行y=0,1
+ 156          {
+ 157   1              unsigned char temp_l, temp_h;
+ 158   1              if(y==1)//如果选择第一行
+ 159   1                      lcd_wri_com(0x80+x);//选中地址
+ 160   1              else
+ 161   1                      lcd_wri_com(0xc0+x);//选中地址
+ 162   1              temp_l = dat % 10;
+ 163   1          temp_h = dat / 10;
+ 164   1          lcd_wri_data(temp_h + 0x30);        
+ 165   1          lcd_wri_data(temp_l + 0x30);
+ 166   1      }
+ 167          /*光标控制*/
+ 168          void lcd1602_guanbiao(unsigned char y, unsigned char x,unsigned char on_off)
+ 169          {
+ 170   1              if(on_off == 1)   //开光标
+ 171   1              {
+ 172   2                      if(y==1)//如果选择第一行
+ 173   2                      lcd_wri_com(0x80+x);
+ 174   2                  else
+ 175   2                      lcd_wri_com(0xc0+x);//将光标移动到秒个位
+ 176   2                      lcd_wri_com(0x0f);//显示光标并且闪烁
+ 177   2              }
+ 178   1              else
+ 179   1              {
+C51 COMPILER V9.00   MAIN                                                                  07/04/2023 16:40:37 PAGE 4   
+
+ 180   2              if(y==1)//如果选择第一行
+ 181   2                      lcd_wri_com(0x80+x);
+ 182   2                  else
+ 183   2                      lcd_wri_com(0xc0+x);//将光标移动到秒个位
+ 184   2                      lcd_wri_com(0x0c);   //关光标
+ 185   2              }
+ 186   1      }
+ 187          
+ 188          /*初始化LCD屏*/
+ 189          void lcd_init(void)                                               //LCD初始化子程序
+ 190          {
+ 191   1              lcd_wri_com(0x38);//置功能8位双行
+ 192   1              lcd_wri_com(0x0c);//显示开关光标
+ 193   1              lcd_wri_com(0x06);//字符进入模式屏幕不动字符后移
+ 194   1              delay_ms(5);//延时5ms
+ 195   1              lcd_wri_com(0x01);  //清屏
+ 196   1          wri_string(1,0,"shi:  ");//初始化显示
+ 197   1              wri_string(1,6,"   wen:");
+ 198   1              wri_string(2,0,"H:  %RH  T:   C");//初始化显示
+ 199   1      }
+ 200          void DHT11_delay_us(unsigned char n)
+ 201          {
+ 202   1          while(--n);
+ 203   1      }
+ 204          
+ 205          void DHT11_delay_ms(unsigned int z)
+ 206          {
+ 207   1         unsigned int i,j;
+ 208   1         for(i=z;i>0;i--)
+ 209   1            for(j=110;j>0;j--);
+ 210   1      }
+ 211          
+ 212          void DHT11_start()
+ 213          {
+ 214   1         Data=1;
+ 215   1         DHT11_delay_us(2);
+ 216   1         Data=0;
+ 217   1         DHT11_delay_ms(30);   //延时18ms以上
+ 218   1         Data=1;
+ 219   1         DHT11_delay_us(30);
+ 220   1      }
+ 221          
+ 222          unsigned char DHT11_rec_byte()      //接收一个字节
+ 223          {
+ 224   1         unsigned char i,dat=0;
+ 225   1        for(i=0;i<8;i++)    //从高到低依次接收8位数据
+ 226   1         {
+ 227   2            while(!Data);   ////等待50us低电平过去
+ 228   2            DHT11_delay_us(8);     //延时60us，如果还为高则数据为1，否则为0
+ 229   2            dat<<=1;           //移位使正确接收8位数据，数据为0时直接移位
+ 230   2            if(Data==1)    //数据为1时，使dat加1来接收数据1
+ 231   2               dat+=1;
+ 232   2            while(Data);  //等待数据线拉低
+ 233   2          }
+ 234   1          return dat;
+ 235   1      }
+ 236          
+ 237          void DHT11_receive()      //接收40位的数据
+ 238          {
+ 239   1          unsigned char R_H,R_L,T_H,T_L,RH,RL,TH,TL,revise;
+ 240   1          DHT11_start();
+ 241   1          if(Data==0)
+C51 COMPILER V9.00   MAIN                                                                  07/04/2023 16:40:37 PAGE 5   
+
+ 242   1          {
+ 243   2              while(Data==0);   //等待拉高
+ 244   2              DHT11_delay_us(40);  //拉高后延时80us
+ 245   2              R_H=DHT11_rec_byte();    //接收湿度高八位
+ 246   2              R_L=DHT11_rec_byte();    //接收湿度低八位
+ 247   2              T_H=DHT11_rec_byte();    //接收温度高八位
+ 248   2              T_L=DHT11_rec_byte();    //接收温度低八位
+ 249   2              revise=DHT11_rec_byte(); //接收校正位
+ 250   2      
+ 251   2              DHT11_delay_us(25);    //结束
+ 252   2      
+ 253   2              if((R_H+R_L+T_H+T_L)==revise)      //校正
+ 254   2              {
+ 255   3                  RH=R_H;
+ 256   3                  RL=R_L;
+ 257   3                  TH=T_H;
+ 258   3                  TL=T_L;
+ 259   3              }
+ 260   2              humi_value = RH;
+ 261   2              temp_value = TH;
+ 262   2          }
+ 263   1      }
+ 264          
+ 265          
+ 266          void AlarmJudge(void) //  温湿度超范围时点亮对应led警示灯
+ 267          {
+ 268   1              if(temp_value>AlarmTH)// 温度是否过高
+ 269   1              {
+ 270   2                      LedTH_P=0;
+ 271   2                      LedTL_P=1;
+ 272   2              }
+ 273   1              else if(temp_value<AlarmTL)// 温度是否过低
+ 274   1              {
+ 275   2                      LedTL_P=0;
+ 276   2                      LedTH_P=1;
+ 277   2              }
+ 278   1              else// 温度正常
+ 279   1              {
+ 280   2                      LedTH_P=1;
+ 281   2                      LedTL_P=1;
+ 282   2              }
+ 283   1      
+ 284   1              if(humi_value>AlarmHH)// 湿度是否过高
+ 285   1              {
+ 286   2                      LedHH_P=0;
+ 287   2                      LedHL_P=1;
+ 288   2              }
+ 289   1              else if(humi_value<AlarmHL)     // 湿度是否过低
+ 290   1              {
+ 291   2                      LedHL_P=0;
+ 292   2                      LedHH_P=1;
+ 293   2              }
+ 294   1              else    // 湿度正常
+ 295   1              {
+ 296   2                      LedHH_P=1;
+ 297   2                      LedHL_P=1;
+ 298   2              }
+ 299   1      
+ 300   1              if((LedHH_P==0)||(LedHL_P==0)||(LedTH_P==0)||(LedTL_P==0))      
+ 301   1              {
+ 302   2                      for(i=0;i<3;i++)
+ 303   2                      {
+C51 COMPILER V9.00   MAIN                                                                  07/04/2023 16:40:37 PAGE 6   
+
+ 304   3                              beep=0;
+ 305   3                              delay_ms(20);
+ 306   3                              beep=1;
+ 307   3                              delay_ms(20);
+ 308   3                      }
+ 309   2              }
+ 310   1      }
+ 311          
+ 312          /*按键服务函数*/
+ 313          void key_service(void)
+ 314          {
+ 315   1          switch (now_window)
+ 316   1          {
+ 317   2                 case  normal_mode:
+ 318   2                 {
+ 319   3                    if (key_value == 1)
+ 320   3                    {
+ 321   4                          now_window = set_mode;
+ 322   4                          curr_menu = 0;
+ 323   4                          wri_string(1,0,"T:  -           ");//初始化显示
+ 324   4                          wri_string(2,0,"H:  -           ");//初始化显示
+ 325   4                          lcd_write_char(1,2,AlarmTL);
+ 326   4                                                                                      lcd_write_char(1,6,AlarmTH);
+ 327   4                          lcd_write_char(2,2,AlarmHL);
+ 328   4                                                                                      lcd_write_char(2,6,AlarmHH);
+ 329   4                          lcd1602_guanbiao(1,3,1);
+ 330   4                    }
+ 331   3                 }
+ 332   2                 break;
+ 333   2                 case  set_mode:
+ 334   2                 {
+ 335   3                          if (key_value == 1)
+ 336   3                          {
+ 337   4                                  ++curr_menu;
+ 338   4                                  if (curr_menu==1)
+ 339   4                                  {
+ 340   5                                      lcd1602_guanbiao(1,7,1);
+ 341   5                                  }
+ 342   4                                  else if(curr_menu==2)
+ 343   4                                  {
+ 344   5                                      lcd1602_guanbiao(2,3,1);
+ 345   5                                  }
+ 346   4                                  else if(curr_menu==3)
+ 347   4                                  {
+ 348   5                                      lcd1602_guanbiao(2,7,1);
+ 349   5                                  }
+ 350   4                                  if(curr_menu>3)
+ 351   4                                  {
+ 352   5                                      curr_menu = 0;
+ 353   5                                      lcd1602_guanbiao(2,7,0);
+ 354   5                                      now_window = normal_mode;
+ 355   5                                     wri_string(1,0,"shi:  ");//初始化显示
+ 356   5                                                                                      wri_string(1,6,"   wen:");
+ 357   5                                          wri_string(2,0,"H:  %RH  T:   C ");//初始化显示
+ 358   5                                          lcd_write_char(2,2,humi_value);
+ 359   5                                              lcd_write_char(2,11,temp_value);
+ 360   5                                              lcd_wri_com(0xcd);
+ 361   5                                              lcd_wri_data(0xdf);
+ 362   5                                  }
+ 363   4                          }
+ 364   3                          if (key_value == 2)
+ 365   3                          {
+C51 COMPILER V9.00   MAIN                                                                  07/04/2023 16:40:37 PAGE 7   
+
+ 366   4                                  if(curr_menu==0)
+ 367   4                                  {
+ 368   5                                       if(++AlarmTL>99)
+ 369   5                                       {
+ 370   6                                           AlarmTL = 0;
+ 371   6                                       }
+ 372   5                                       lcd_write_char(1,2,AlarmTL);
+ 373   5                                       lcd1602_guanbiao(1,3,1);
+ 374   5                                  }
+ 375   4                                  else if (curr_menu==1)
+ 376   4                                  {
+ 377   5                                       if(++AlarmTH>99)
+ 378   5                                       {
+ 379   6                                           AlarmTH = 0;
+ 380   6                                       }
+ 381   5                                       lcd_write_char(1,6,AlarmTH);
+ 382   5                                       lcd1602_guanbiao(1,7,1);
+ 383   5                                  }
+ 384   4                                  else if(curr_menu==2)
+ 385   4                                  {
+ 386   5                                      if(++AlarmHL>99)
+ 387   5                                       {
+ 388   6                                           AlarmHL = 0;
+ 389   6                                       }
+ 390   5                                       lcd_write_char(2,2,AlarmHL);
+ 391   5                                       lcd1602_guanbiao(2,3,1);
+ 392   5                                  }
+ 393   4                                  else if(curr_menu==3)
+ 394   4                                  {
+ 395   5                                       if(++AlarmHH>99)
+ 396   5                                       {
+ 397   6                                           AlarmHH = 0;
+ 398   6                                       }
+ 399   5                                       lcd_write_char(2,6,AlarmHH);
+ 400   5                                       lcd1602_guanbiao(2,7,1);
+ 401   5                                  }
+ 402   4                          }
+ 403   3                          if (key_value == 3)
+ 404   3                          {
+ 405   4                                  if(curr_menu==0)
+ 406   4                                  {
+ 407   5                                       if(--AlarmTL<0)
+ 408   5                                       {
+ 409   6                                           AlarmTL = 99;
+ 410   6                                       }
+ 411   5                                       lcd_write_char(1,2,AlarmTL);
+ 412   5                                        lcd1602_guanbiao(1,3,1);
+ 413   5                                  }
+ 414   4                                  else if (curr_menu==1)
+ 415   4                                  {
+ 416   5                                       if(--AlarmTH<0)
+ 417   5                                       {
+ 418   6                                           AlarmTH = 99;
+ 419   6                                       }
+ 420   5                                       lcd_write_char(1,6,AlarmTH);
+ 421   5                                       lcd1602_guanbiao(1,7,1);
+ 422   5                                  }
+ 423   4                                  else if(curr_menu==2)
+ 424   4                                  {
+ 425   5                                      if(--AlarmHL<0)
+ 426   5                                       {
+ 427   6                                           AlarmHL = 99;
+C51 COMPILER V9.00   MAIN                                                                  07/04/2023 16:40:37 PAGE 8   
+
+ 428   6                                       }
+ 429   5                                        lcd_write_char(2,2,AlarmHL);
+ 430   5                                         lcd1602_guanbiao(2,3,1);
+ 431   5                                  }
+ 432   4                                  else if(curr_menu==3)
+ 433   4                                  {
+ 434   5                                      if(--AlarmHH<0)
+ 435   5                                       {
+ 436   6                                           AlarmHH = 99;
+ 437   6      
+ 438   6                                       }
+ 439   5                                       lcd_write_char(2,6,AlarmHH);
+ 440   5                                        lcd1602_guanbiao(2,7,1);
+ 441   5                                  }
+ 442   4                          }
+ 443   3                 }
+ 444   2                 break;
+ 445   2          }
+ 446   1      }
+ 447          /*定时闪烁函数*/
+ 448          void time_service(void)
+ 449          {
+ 450   1                      if(time_100ms_flag)
+ 451   1                      {
+ 452   2                              time_100ms_flag = 0;
+ 453   2                  if (++cnt_500ms>5)
+ 454   2                  {
+ 455   3                          cnt_500ms = 0;
+ 456   3                          if(now_window == normal_mode)
+ 457   3                          {
+ 458   4                              EA = 0;
+ 459   4                              DHT11_receive();
+ 460   4                              EA = 1;
+ 461   4                              lcd_write_char(2,2,humi_value);
+ 462   4                                                                                                      lcd_write_char(2,11,temp_value);
+ 463   4                              AlarmJudge();//报警函数
+ 464   4                          }
+ 465   3                  }
+ 466   2      
+ 467   2                      }
+ 468   1      
+ 469   1      }
+ 470          
+ 471          /*初始化所有硬件，及其变量参数*/
+ 472          void init_all_hardware(void)
+ 473          {
+ 474   1                       
+ 475   1                      time_init();//定时器初始化
+ 476   1                      lcd_init();
+ 477   1                      lcd_write_char(2,2,humi_value);
+ 478   1                      lcd_write_char(2,11,temp_value);
+ 479   1                      lcd_wri_com(0xcd);
+ 480   1                      lcd_wri_data(0xdf);
+ 481   1                      key_value = 20;
+ 482   1                      now_window = normal_mode;
+ 483   1                      cnt_100ms = 0;
+ 484   1                      time_100ms_flag = 0;
+ 485   1              curr_menu = 0;
+ 486   1      }
+ 487          void main(void)
+ 488          {
+ 489   1               init_all_hardware();//初始化硬件，IO和定时器
+C51 COMPILER V9.00   MAIN                                                                  07/04/2023 16:40:37 PAGE 9   
+
+ 490   1               while(1)
+ 491   1               {
+ 492   2                       key_scan();//按键扫描
+ 493   2                       key_service();//按键服务处理函数
+ 494   2                       time_service();//时间处理函数
+ 495   2               }
+ 496   1      }
+ 497           /*按键扫描函数*/
+ 498          void time0_interrupt() interrupt 1
+ 499          {
+ 500   1                 TF0 = 0;//清除标志
+ 501   1                 TR0 = 0;
+ 502   1                 if (++cnt_100ms>50)
+ 503   1                 {
+ 504   2                              cnt_100ms = 0;
+ 505   2                              time_100ms_flag = 1;
+ 506   2                 }
+ 507   1                 TR0 = 1;
+ 508   1                 TH0 = 0xf8;
+ 509   1                 TL0 = 0x2f;//装载初值2ms
+ 510   1      }
+ 511          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1261    ----
+   CONSTANT SIZE    =     82    ----
+   XDATA SIZE       =   ----    ----
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =     17       7
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
